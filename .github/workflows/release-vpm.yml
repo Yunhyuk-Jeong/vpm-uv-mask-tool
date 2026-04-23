@@ -21,7 +21,7 @@ jobs:
             - name: Read package metadata
               id: meta
               run: |
-                  PKG_JSON="com.iyankim.planefittocamera/package.json"
+                  PKG_JSON="com.iyankim.uvmasktool/package.json"
 
                   PKG_NAME=$(jq -r '.name' "$PKG_JSON")
                   VERSION=$(jq -r '.version' "$PKG_JSON")
@@ -41,7 +41,7 @@ jobs:
 
             # 3) VPM ZIP 생성 (패키지 폴더 전체)
             - name: Build VPM zip
-              working-directory: com.iyankim.planefittocamera
+              working-directory: com.iyankim.uvmasktool
               run: |
                   PKG_NAME="${{ steps.meta.outputs.pkg_name }}"
                   VERSION="${{ steps.meta.outputs.version }}"
