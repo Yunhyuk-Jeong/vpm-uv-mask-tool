@@ -1,0 +1,145 @@
+name: Release VPM package
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+permissions:
+    contents: write
+
+jobs:
+    build-and-publish:
+        runs-on: ubuntu-latest
+
+        steps:
+            # 1) 패키지 레포 체크아웃
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            # 2) package.json 메타데이터 읽기
+            - name: Read package metadata
+              id: meta
+              run: |
+                  PKG_JSON="com.iyankim.planefittocamera/package.json"
+
+                  PKG_NAME=$(jq -r '.name' "$PKG_JSON")
+                  VERSION=$(jq -r '.version' "$PKG_JSON")
+                  DISPLAY=$(jq -r '.displayName // ""' "$PKG_JSON")
+                  DESC=$(jq -r '.description // ""' "$PKG_JSON")
+                  AUTHOR_NAME=$(jq -r '.author.name // ""' "$PKG_JSON")
+                  AUTHOR_EMAIL=$(jq -r '.author.email // ""' "$PKG_JSON")
+                  AUTHOR_URL=$(jq -r '.author.url // ""' "$PKG_JSON")
+
+                  echo "pkg_name=$PKG_NAME" >> $GITHUB_OUTPUT
+                  echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  echo "display=$DISPLAY" >> $GITHUB_OUTPUT
+                  echo "desc=$DESC" >> $GITHUB_OUTPUT
+                  echo "author_name=$AUTHOR_NAME" >> $GITHUB_OUTPUT
+                  echo "author_email=$AUTHOR_EMAIL" >> $GITHUB_OUTPUT
+                  echo "author_url=$AUTHOR_URL" >> $GITHUB_OUTPUT
+
+            # 3) VPM ZIP 생성 (패키지 폴더 전체)
+            - name: Build VPM zip
+              working-directory: com.iyankim.planefittocamera
+              run: |
+                  PKG_NAME="${{ steps.meta.outputs.pkg_name }}"
+                  VERSION="${{ steps.meta.outputs.version }}"
+
+                  mkdir -p ../out
+                  zip -r "../out/${PKG_NAME}-${VERSION}.zip" .
+
+            # 4) SHA256 계산
+            - name: Compute SHA256
+              id: sha
+              run: |
+                  FILE=$(ls out/*.zip)
+                  SHA=$(sha256sum "$FILE" | awk '{print $1}')
+                  echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+            # 5) GitHub Release에 ZIP 업로드
+            - name: Upload Release asset
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: out/*.zip
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            # 6) 중앙 인덱스 레포(iyan-vpm) 체크아웃
+            - name: Checkout iyan-vpm
+              uses: actions/checkout@v4
+              with:
+                  repository: Yunhyuk-Jeong/iyan-vpm
+                  token: ${{ secrets.VPM_PUSH_TOKEN }}
+                  path: iyan-vpm
+
+            # 7) vpm.json 수정
+            - name: Update vpm.json
+              run: |
+                  PKG_NAME="${{ steps.meta.outputs.pkg_name }}"
+                  VERSION="${{ steps.meta.outputs.version }}"
+                  DISPLAY="${{ steps.meta.outputs.display }}"
+                  DESC="${{ steps.meta.outputs.desc }}"
+                  AUTHOR_NAME="${{ steps.meta.outputs.author_name }}"
+                  AUTHOR_EMAIL="${{ steps.meta.outputs.author_email }}"
+                  AUTHOR_URL="${{ steps.meta.outputs.author_url }}"
+                  SHA="${{ steps.sha.outputs.sha }}"
+
+                  VPM="iyan-vpm/vpm.json"
+
+                  URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${PKG_NAME}-${VERSION}.zip"
+                  REPO_URL="https://raw.githubusercontent.com/Yunhyuk-Jeong/iyan-vpm/main/vpm.json"
+                  DOC_URL="https://github.com/${{ github.repository }}"
+                  CHANGELOG_URL="https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
+
+                  jq \
+                    --arg pkg "$PKG_NAME" \
+                    --arg ver "$VERSION" \
+                    --arg disp "$DISPLAY" \
+                    --arg desc "$DESC" \
+                    --arg sha "$SHA" \
+                    --arg url "$URL" \
+                    --arg repo "$REPO_URL" \
+                    --arg doc "$DOC_URL" \
+                    --arg changelog "$CHANGELOG_URL" \
+                    --arg aName "$AUTHOR_NAME" \
+                    --arg aEmail "$AUTHOR_EMAIL" \
+                    --arg aUrl "$AUTHOR_URL" \
+                    '.packages[$pkg].versions[$ver] = {
+                      name: $pkg,
+                      displayName: $disp,
+                      version: $ver,
+                      unity: "2022.3",
+                      description: $desc,
+                      vrchatVersion: "2022.1.1",
+                      author: {name: $aName, email: $aEmail, url: $aUrl},
+                      dependencies: {},
+                      url: $url,
+                      repo: $repo,
+                      zipSHA256: $sha,
+                      documentationUrl: $doc,
+                      changelogUrl: $changelog
+                    }' "$VPM" > tmp && mv tmp "$VPM"
+
+            # 8) iyan-vpm에 커밋 & 푸시
+            - name: Commit and push changes
+              run: |
+                  PKG_NAME=${{ steps.meta.outputs.pkg_name }}
+                  VERSION=${{ steps.meta.outputs.version }}
+
+                  cd iyan-vpm
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+                  git add vpm.json
+
+                  if git diff --cached --quiet; then
+                    echo "No changes to commit."
+                    exit 0
+                  fi
+
+                  git commit -m "chore(vpm): auto-update $PKG_NAME $VERSION"
+                  git push
+              env:
+                  GITHUB_TOKEN: ${{ secrets.VPM_PUSH_TOKEN }}
